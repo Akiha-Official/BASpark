@@ -12,6 +12,22 @@ namespace BASpark
 {
     public partial class MainWindow : Window
     {
+        private const int WM_WINDOWPOSCHANGING = 0x0046;
+        private const uint EVENT_OBJECT_REORDER = 0x8004;
+        private const uint WINEVENT_OUTOFCONTEXT = 0;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WINDOWPOS
+        {
+            public IntPtr hwnd;
+            public IntPtr hwndInsertAfter;
+            public int x;
+            public int y;
+            public int cx;
+            public int cy;
+            public uint flags;
+        }
+
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern IntPtr OpenProcess(uint processAccess, bool bInheritHandle, uint processId);
 
@@ -68,6 +84,14 @@ namespace BASpark
         [DllImport("user32.dll")]
         static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
 
+        [DllImport("user32.dll")]
+        static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, WinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+
+        [DllImport("user32.dll")]
+        static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+        private delegate void WinEventDelegate(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
+
         private const uint GA_ROOT = 2;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -108,6 +132,7 @@ namespace BASpark
         private const int WS_EX_TRANSPARENT = 0x00000020;
         private const int WS_EX_LAYERED = 0x00080000;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
 
         private const Int32 CURSOR_SHOWING = 0x00000001; // 光标可见状态码
         private const int SM_XVIRTUALSCREEN = 76;
@@ -149,6 +174,8 @@ namespace BASpark
 
         // 新增：层级保活计时器
         private System.Windows.Threading.DispatcherTimer? _topmostTimer;
+        private WinEventDelegate? _winEventDelegate;
+        private IntPtr _hookPtr;
 
         public MainWindow()
         {
@@ -164,14 +191,62 @@ namespace BASpark
         {
             base.OnSourceInitialized(e);
             _hwnd = new WindowInteropHelper(this).Handle;
-            int style = GetWindowLong(_hwnd, GWL_EXSTYLE);
-            SetWindowLong(_hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOOLWINDOW);
-
+            
             UpdateOverlayBounds();
+            
+            _winEventDelegate = new WinEventDelegate(WinEventProc);
+            _hookPtr = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, IntPtr.Zero, _winEventDelegate, 0, 0, WINEVENT_OUTOFCONTEXT);
+
+            HwndSource source = HwndSource.FromHwnd(_hwnd);
+            source.AddHook(WndProc);
+            
+            int style = GetWindowLong(_hwnd, GWL_EXSTYLE);
+            SetWindowLong(_hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT); 
+            
+            SafeEnsureTopmost();
+            
             SystemEvents.DisplaySettingsChanged += HandleDisplaySettingsChanged;
             SetupGlobalHooks();
 
             InitTopmostSentinel();
+        }
+
+        private void WinEventProc(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
+        {
+            SafeEnsureTopmost();
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            // WM_WINDOWPOSCHANGING (0x0046)
+            if (msg == WM_WINDOWPOSCHANGING)
+            {
+                WINDOWPOS wp = Marshal.PtrToStructure<WINDOWPOS>(lParam);
+
+                wp.hwndInsertAfter = (IntPtr)(-1); // HWND_TOPMOST
+                wp.y = _virtualScreenTop - 1;
+                wp.flags |= 0x0040;               // SWP_SHOWWINDOW
+
+                Marshal.StructureToPtr(wp, lParam, false);
+            }
+
+            // WM_ACTIVATE (0x0006)
+            if (msg == 0x0006)
+            {
+                //  0  WA_INACTIVE
+                if (((int)wParam & 0xFFFF) == 0)
+                {
+                    SafeEnsureTopmost();
+                }
+            }
+
+            // WM_ENTERMENULOOP (0x0211)
+            if (msg == 0x0211)
+            {
+                SafeEnsureTopmost();
+            }
+
+            return IntPtr.Zero;
         }
 
         private void InitTopmostSentinel()
@@ -180,7 +255,7 @@ namespace BASpark
 
             _topmostTimer = new System.Windows.Threading.DispatcherTimer
             {
-                Interval = TimeSpan.FromSeconds(2)
+                Interval = TimeSpan.FromSeconds(5)
             };
             _topmostTimer.Tick += (s, e) => SafeEnsureTopmost();
             _topmostTimer.Start();
@@ -195,9 +270,12 @@ namespace BASpark
         private void SafeEnsureTopmost()
         {
             if (_hwnd == IntPtr.Zero) return;
-
-            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
+            SetWindowPos(_hwnd, HWND_TOPMOST, 
+                _virtualScreenLeft, 
+                _virtualScreenTop - 1, 
+                _virtualScreenWidth, 
+                _virtualScreenHeight,
+                SWP_NOACTIVATE | SWP_NOSENDCHANGING);
         }
 
         public void UpdateColor(string color)
@@ -396,7 +474,6 @@ namespace BASpark
                 return _isSuppressedByEnvironment;
             }
 
-            // 桌面判断逻辑
             string className = GetWindowClassName(targetWindow);
             if (string.IsNullOrEmpty(className))
             {
@@ -591,7 +668,7 @@ namespace BASpark
                 _hwnd,
                 HWND_TOPMOST,
                 _virtualScreenLeft,
-                _virtualScreenTop,
+                _virtualScreenTop - 1,
                 _virtualScreenWidth,
                 _virtualScreenHeight,
                 SWP_NOACTIVATE);
@@ -685,6 +762,12 @@ namespace BASpark
 
         protected override void OnClosed(EventArgs e)
         {
+            if (_hookPtr != IntPtr.Zero)
+            {
+                UnhookWinEvent(_hookPtr);
+                _hookPtr = IntPtr.Zero;
+            }
+
             if (_topmostTimer != null)
             {
                 _topmostTimer.Stop();
