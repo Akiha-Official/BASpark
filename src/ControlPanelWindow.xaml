@@ -130,7 +130,8 @@
                     </StackPanel.Style>
                     <RadioButton Name="SubTabBasic" Content=" ├─ 基础设置" Style="{StaticResource NavBtn}" GroupName="SettingsTree" IsChecked="True" FontSize="13" Height="32"/>
                     <RadioButton Name="SubTabVisual" Content=" ├─ 视觉表现" Style="{StaticResource NavBtn}" GroupName="SettingsTree" FontSize="13" Height="32"/>
-                    <RadioButton Name="SubTabFilter" Content=" └─ 环境过滤" Style="{StaticResource NavBtn}" GroupName="SettingsTree" FontSize="13" Height="32"/>
+                    <RadioButton Name="SubTabFilter" Content=" ├─ 环境过滤" Style="{StaticResource NavBtn}" GroupName="SettingsTree" FontSize="13" Height="32"/>
+                    <RadioButton Name="SubTabMultiScreen" Content=" └─ 多屏管理" Style="{StaticResource NavBtn}" GroupName="SettingsTree" FontSize="13" Height="32"/>
                 </StackPanel>
 
                 <RadioButton Name="TabAbout" Content="关于" Style="{StaticResource NavBtn}" Click="Tab_Click" GroupName="MainGroup"/>
@@ -233,16 +234,6 @@
                             <CheckBox Name="CheckTouchscreenMode" Content="触摸屏模式" Style="{StaticResource ToggleSwitch}" Margin="0,0,0,2"/>
                             <TextBlock Text="* 开启后，即便系统隐藏了鼠标指针特效依然生效，仅适用于触摸屏或特定的全屏应用环境。" FontSize="11" Foreground="#9BA3AF" Margin="34,0,0,12" TextWrapping="Wrap" Opacity="0.8"/>
                             <CheckBox Name="CheckTelemetry" Content="允许发送匿名运行数据以改进软件" Style="{StaticResource ToggleSwitch}" FontSize="12"/>
-
-                            <Separator Background="#F0F2F5" Margin="0,4,0,12"/>
-                            
-                            <TextBlock Text="特效主题颜色" Foreground="#666" Margin="0,0,0,8" FontSize="12"/>
-                            <StackPanel Orientation="Horizontal">
-                                <Border Name="ColorPreview" Width="40" Height="28" CornerRadius="6" BorderBrush="#DDD" BorderThickness="1" Margin="0,0,10,0"/>
-                                <Button Content="更改颜色" Click="PickColor_Click" Width="90" Height="28" Background="#F8FAFF" BorderBrush="#45AFFF" Foreground="#45AFFF" Cursor="Hand" FontSize="12">
-                                    <Button.Resources><Style TargetType="Border"><Setter Property="CornerRadius" Value="4"/></Style></Button.Resources>
-                                </Button>
-                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -331,6 +322,15 @@
                                 </DockPanel>
                                 <Slider Name="SliderTrailRefresh" Minimum="10" Maximum="240" TickFrequency="10" IsSnapToTickEnabled="True" 
                                         ValueChanged="EffectSlider_ValueChanged" Margin="0,5,0,0"/>
+                            </StackPanel>
+
+                            <Separator Background="#F0F2F5" Margin="0,2,0,12"/>
+                            <TextBlock Text="特效主题颜色" Foreground="#666" Margin="0,0,0,8" FontSize="12"/>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Name="ColorPreview" Width="40" Height="28" CornerRadius="6" BorderBrush="#DDD" BorderThickness="1" Margin="0,0,10,0"/>
+                                <Button Content="更改颜色" Click="PickColor_Click" Width="90" Height="28" Background="#F8FAFF" BorderBrush="#45AFFF" Foreground="#45AFFF" Cursor="Hand" FontSize="12">
+                                    <Button.Resources><Style TargetType="Border"><Setter Property="CornerRadius" Value="4"/></Style></Button.Resources>
+                                </Button>
                             </StackPanel>
                         </StackPanel>
                     </Border>
@@ -424,16 +424,62 @@
                     </Border>
                 </StackPanel>
 
+                <StackPanel>
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsChecked, ElementName=SubTabMultiScreen}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+
+                    <Border Background="White" CornerRadius="12" Padding="16" Margin="0,0,0,16" BorderBrush="#EAECEF" BorderThickness="1">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="多屏显示管理" FontSize="14" FontWeight="Bold" Foreground="#45AFFF" VerticalAlignment="Center"/>
+                                <Button DockPanel.Dock="Right" Content="刷新显示器" Click="RefreshScreenOptions_Click" Padding="10,4" Height="28" Width="200" Background="#F8FAFF" BorderBrush="#D6DEE8" Cursor="Hand">
+                                    <Button.Resources><Style TargetType="Border"><Setter Property="CornerRadius" Value="6"/></Style></Button.Resources>
+                                </Button>
+                            </DockPanel>
+                            <TextBlock Text="勾选要启用特效窗口的显示器。" FontSize="12" Foreground="#666" Margin="0,0,0,12" TextWrapping="Wrap"/>
+
+                            <ListBox Name="ListScreenOptions" Background="Transparent" BorderThickness="0" MinHeight="180">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border CornerRadius="10" BorderBrush="#DCE5F2" BorderThickness="1" Background="#FAFCFF" Padding="12" Margin="0,0,0,10">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold" Foreground="#263238"/>
+                                                    <TextBlock Text="{Binding ResolutionText}" FontSize="12" Foreground="#455A64" Margin="0,4,0,0"/>
+                                                    <TextBlock Text="{Binding DetailText}" FontSize="11" Foreground="#78909C" Margin="0,4,0,0"/>
+                                                </StackPanel>
+                                                <CheckBox Grid.Column="1" IsChecked="{Binding IsEnabled}" Content="启用" VerticalAlignment="Center" Style="{StaticResource ToggleSwitch}" Margin="16,0,0,0"/>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
                 </StackPanel>
                 <StackPanel Name="PageAbout" Visibility="Collapsed">
                     <TextBlock Text="关于" FontSize="24" FontWeight="Bold" Margin="0,0,0,20"/>
                     
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,10">
-                        <TextBlock FontSize="18" FontWeight="Bold" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,14">
+                        <TextBlock FontSize="28" FontWeight="Bold" VerticalAlignment="Center">
                             <Run Text="BASpark "/>
-                            <Run x:Name="VersionText" Text="v1.1.0" Foreground="#45AFFF"/>
+                            <Run x:Name="VersionText" Text="v1.1.0" Foreground="#45AFFF" FontSize="24"/>
                         </TextBlock>
-                        <Button Content="检查更新" Click="CheckUpdate_Click" Margin="15,0,0,0" Padding="10,2" Height="26" FontSize="12" Background="#E3F2FD" Foreground="#45AFFF" BorderBrush="#45AFFF" BorderThickness="1" Cursor="Hand">
+                        <Button Content="检查更新" Click="CheckUpdate_Click" Margin="18,0,0,0" Padding="12,3" Height="30" FontSize="12" Background="#E3F2FD" Foreground="#45AFFF" BorderBrush="#45AFFF" BorderThickness="1" Cursor="Hand">
                             <Button.Resources><Style TargetType="Border"><Setter Property="CornerRadius" Value="4"/></Style></Button.Resources>
                         </Button>
                     </StackPanel>

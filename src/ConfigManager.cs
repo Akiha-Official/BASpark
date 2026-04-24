@@ -45,6 +45,7 @@ namespace BASpark
         public static string ActiveProfileId { get; set; } = "";
         public static bool IsTouchscreenMode { get; set; } = false;
         public static int ClickTriggerType { get; set; } = 0; // 0:左, 1:右, 2:左右
+        public static string EnabledScreenIds { get; set; } = "";
 
         private static List<FilterProfile> _profiles = new List<FilterProfile>();
 
@@ -76,6 +77,7 @@ namespace BASpark
                         ShowEffectOnDesktop = Convert.ToBoolean(key.GetValue("ShowEffectOnDesktop", true));
                         IsTouchscreenMode = Convert.ToBoolean(key.GetValue("IsTouchscreenMode", false));
                         ClickTriggerType = Convert.ToInt32(key.GetValue("ClickTriggerType", 0));
+                        EnabledScreenIds = key.GetValue("EnabledScreenIds", "")?.ToString() ?? "";
 
                         FilterProfiles = key.GetValue("FilterProfiles", "")?.ToString() ?? "";
                         ActiveProfileId = key.GetValue("ActiveProfileId", "")?.ToString() ?? "";
@@ -187,6 +189,39 @@ namespace BASpark
             return profile.Processes.ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
+        public static HashSet<string> GetEnabledScreenIds()
+        {
+            if (string.IsNullOrWhiteSpace(EnabledScreenIds))
+            {
+                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            try
+            {
+                var parsed = System.Text.Json.JsonSerializer.Deserialize<List<string>>(EnabledScreenIds) ?? new List<string>();
+                return parsed
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Select(s => s.Trim())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        public static void SaveEnabledScreenIds(IEnumerable<string> screenIds)
+        {
+            var normalized = screenIds
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            string json = System.Text.Json.JsonSerializer.Serialize(normalized);
+            Save("EnabledScreenIds", json);
+        }
+
         public static void ResetAndClear()
         {
             try
@@ -221,6 +256,7 @@ namespace BASpark
                 _profiles.Clear();
                 IsTouchscreenMode = false;
                 ClickTriggerType = 0;
+                EnabledScreenIds = "";
             }
             catch { }
         }

@@ -18,6 +18,8 @@ using System.Security.Principal;
 using Microsoft.Win32;
 using System.Text.RegularExpressions;
 using System.Windows.Input;
+using System.Windows.Forms;
+using System.Runtime.InteropServices;
 
 namespace BASpark
 {
@@ -28,8 +30,32 @@ namespace BASpark
         public bool IsSelected { get; set; }
     }
 
+    public class ScreenOptionItem
+    {
+        public int DisplayIndex { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string ResolutionText { get; set; } = string.Empty;
+        public string DetailText { get; set; } = string.Empty;
+        public string DeviceName { get; set; } = string.Empty;
+        public bool IsEnabled { get; set; }
+    }
+
     public partial class ControlPanelWindow : Window
     {
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+        [DllImport("shcore.dll")]
+        private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+        private const uint MONITOR_DEFAULTTONEAREST = 2;
+        private const int MDT_EFFECTIVE_DPI = 0;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            public int X;
+            public int Y;
+        }
+
         private DispatcherTimer _refreshTimer;
         private DispatcherTimer _noticeTimer;
         private bool _isCheckingUpdate = false;
@@ -37,6 +63,7 @@ namespace BASpark
         public ObservableCollection<FilterProfile> Profiles { get; set; } = new ObservableCollection<FilterProfile>();
         public ObservableCollection<string> CurrentProfileProcesses { get; set; } = new ObservableCollection<string>();
         public ObservableCollection<ProcessItem> RunningProcessList { get; set; } = new ObservableCollection<ProcessItem>();
+        public ObservableCollection<ScreenOptionItem> ScreenOptions { get; set; } = new ObservableCollection<ScreenOptionItem>();
 
         public ControlPanelWindow()
         {
@@ -45,9 +72,11 @@ namespace BASpark
             ComboProfiles.ItemsSource = Profiles;
             ListConfiguredProcesses.ItemsSource = CurrentProfileProcesses;
             ListRunningProcesses.ItemsSource = RunningProcessList;
+            ListScreenOptions.ItemsSource = ScreenOptions;
 
             LoadVersion();
             LoadSettings();
+            LoadScreenOptions();
             CheckAdminStatus();
             LoadRemoteNotice();
             
@@ -381,6 +410,63 @@ namespace BASpark
             SliderTrailRefresh.Value = ConfigManager.TrailRefreshRate;
         }
 
+        private void LoadScreenOptions()
+        {
+            var selectedIds = ConfigManager.GetEnabledScreenIds();
+
+            ScreenOptions.Clear();
+            var screens = Screen.AllScreens.OrderBy(s => s.Bounds.Left).ThenBy(s => s.Bounds.Top).ToList();
+
+            for (int i = 0; i < screens.Count; i++)
+            {
+                var screen = screens[i];
+                bool enabled = selectedIds.Count == 0 || selectedIds.Contains(screen.DeviceName);
+                string title = $"显示器 {i + 1}" + (screen.Primary ? " (主显示器)" : string.Empty);
+                string resolution = $"{screen.Bounds.Width} x {screen.Bounds.Height}";
+                string detail = $"{GetScaleText(screen)}  ·  位置 ({screen.Bounds.Left}, {screen.Bounds.Top})";
+
+                ScreenOptions.Add(new ScreenOptionItem
+                {
+                    DisplayIndex = i + 1,
+                    Title = title,
+                    ResolutionText = resolution,
+                    DetailText = detail,
+                    DeviceName = screen.DeviceName,
+                    IsEnabled = enabled
+                });
+            }
+        }
+
+        private static string GetScaleText(Screen screen)
+        {
+            try
+            {
+                var center = new POINT
+                {
+                    X = screen.Bounds.Left + (screen.Bounds.Width / 2),
+                    Y = screen.Bounds.Top + (screen.Bounds.Height / 2)
+                };
+                IntPtr monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
+                if (monitor == IntPtr.Zero)
+                {
+                    return "缩放 100%";
+                }
+
+                int hr = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, out uint dpiX, out _);
+                if (hr != 0 || dpiX == 0)
+                {
+                    return "缩放 100%";
+                }
+
+                int scale = (int)Math.Round(dpiX / 96.0 * 100);
+                return $"缩放 {scale}%";
+            }
+            catch
+            {
+                return "缩放 100%";
+            }
+        }
+
         private void CheckAutoStart_Changed(object sender, RoutedEventArgs e)
         {
             UpdateStartSilentInterlock();
@@ -706,6 +792,20 @@ namespace BASpark
             ConfigManager.Save("ShowEffectOnDesktop", CheckShowEffectOnDesktop.IsChecked ?? true);
             ConfigManager.Save("ClickTriggerType", clickType);
 
+            var enabledScreenIds = ConfigManager.GetEnabledScreenIds();
+            var selectedIds = ScreenOptions
+                .Where(s => s.IsEnabled)
+                .Select(s => s.DeviceName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (selectedIds.Count == 0)
+            {
+                System.Windows.MessageBox.Show(this, "至少需要启用一个屏幕。", "多屏控制", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            ConfigManager.SaveEnabledScreenIds(selectedIds);
+
             App.SetAutoStart(ConfigManager.AutoStart);
             ApplyAutoStartSettings();
 
@@ -714,11 +814,15 @@ namespace BASpark
             App.Overlay?.UpdateTrailRefreshRate(trailRefreshRate);
             App.Overlay?.RefreshEnvironmentFilterState();
             App.Overlay?.UpdateTouchMode(isTouchscreenEnabled);
+            if (!enabledScreenIds.SetEquals(selectedIds))
+            {
+                App.Overlay?.RefreshScreenSelection();
+            }
 
             bool isCurrentAdmin = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
             if (runAsAdminEnabled && !isCurrentAdmin)
             {
-                var res = System.Windows.MessageBox.Show(
+                var res = System.Windows.MessageBox.Show(this,
                     "需要以管理员权限重启应用以应用设置，是否立即重启？", 
                     "需要权限", 
                     MessageBoxButton.YesNo, 
@@ -731,7 +835,20 @@ namespace BASpark
                 }
             }
 
-            System.Windows.MessageBox.Show("配置已成功应用！", "BASpark", MessageBoxButton.OK, MessageBoxImage.Information);
+            System.Windows.MessageBox.Show(this, "配置已成功应用！", "BASpark", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void RefreshScreenOptions_Click(object sender, RoutedEventArgs e)
+        {
+            _ = sender;
+            _ = e;
+            var selectedIds = ScreenOptions.Where(s => s.IsEnabled).Select(s => s.DeviceName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            LoadScreenOptions();
+            foreach (var item in ScreenOptions)
+            {
+                item.IsEnabled = selectedIds.Count == 0 || selectedIds.Contains(item.DeviceName);
+            }
+            ListScreenOptions.Items.Refresh();
         }
 
         private void ApplyAutoStartSettings()

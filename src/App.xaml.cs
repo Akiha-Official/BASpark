@@ -11,7 +11,7 @@ namespace BASpark
 {
     public partial class App : System.Windows.Application
     {
-        public static MainWindow? Overlay { get; private set; }
+        public static OverlayManager? Overlay { get; private set; }
         private System.Windows.Forms.NotifyIcon? _notifyIcon;
         private ControlPanelWindow? _controlPanel;
 
@@ -72,8 +72,8 @@ namespace BASpark
 
             InitTrayIcon();
 
-            Overlay = new MainWindow();
-            Overlay.Show();
+            Overlay = new OverlayManager();
+            Overlay.Start();
 
             if (!(launchedFromAutoStart && ConfigManager.StartSilent))
             {
@@ -220,7 +220,7 @@ namespace BASpark
             this.Dispatcher.Invoke(() =>
             {
                 try { _controlPanel?.Close(); } catch { }
-                try { Overlay?.Close(); } catch { }
+                try { Overlay?.Dispose(); } catch { }
             });
 
             if (_mutex != null)
