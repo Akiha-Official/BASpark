@@ -12,6 +12,14 @@ namespace BASpark
         Whitelist
     }
 
+    public class FilterProfile
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString();
+        public string Name { get; set; } = "新配置组";
+        public ProcessFilterModeOption Mode { get; set; } = ProcessFilterModeOption.Blacklist;
+        public List<string> Processes { get; set; } = new List<string>();
+    }
+
     public static class ConfigManager
     {
         private const string RegPath = @"Software\BASpark";
@@ -32,8 +40,14 @@ namespace BASpark
         public static int TrailRefreshRate { get; set; } = 40;
         public static bool EnableEnvironmentFilter { get; set; } = false;
         public static bool HideInFullscreen { get; set; } = true;
-        public static ProcessFilterModeOption ProcessFilterMode { get; set; } = ProcessFilterModeOption.Disabled;
-        public static string ProcessFilterList { get; set; } = "";
+        public static bool ShowEffectOnDesktop { get; set; } = true;
+        public static string FilterProfiles { get; set; } = "";
+        public static string ActiveProfileId { get; set; } = "";
+        public static bool IsTouchscreenMode { get; set; } = false;
+        public static int ClickTriggerType { get; set; } = 0; // 0:左, 1:右, 2:左右
+        public static string EnabledScreenIds { get; set; } = "";
+
+        private static List<FilterProfile> _profiles = new List<FilterProfile>();
 
         public static void Load()
         {
@@ -60,20 +74,73 @@ namespace BASpark
                         TrailRefreshRate = Math.Clamp(Convert.ToInt32(key.GetValue("TrailRefreshRate", 40)), 10, 240);
                         EnableEnvironmentFilter = Convert.ToBoolean(key.GetValue("EnableEnvironmentFilter", false));
                         HideInFullscreen = Convert.ToBoolean(key.GetValue("HideInFullscreen", true));
+                        ShowEffectOnDesktop = Convert.ToBoolean(key.GetValue("ShowEffectOnDesktop", true));
+                        IsTouchscreenMode = Convert.ToBoolean(key.GetValue("IsTouchscreenMode", false));
+                        ClickTriggerType = Convert.ToInt32(key.GetValue("ClickTriggerType", 0));
+                        EnabledScreenIds = key.GetValue("EnabledScreenIds", "")?.ToString() ?? "";
 
-                        string processFilterModeRaw = key.GetValue("ProcessFilterMode", ProcessFilterModeOption.Disabled.ToString())?.ToString()
-                            ?? ProcessFilterModeOption.Disabled.ToString();
-                        if (!Enum.TryParse(processFilterModeRaw, true, out ProcessFilterModeOption processFilterMode))
+                        FilterProfiles = key.GetValue("FilterProfiles", "")?.ToString() ?? "";
+                        ActiveProfileId = key.GetValue("ActiveProfileId", "")?.ToString() ?? "";
+
+                        if (!string.IsNullOrEmpty(FilterProfiles))
                         {
-                            processFilterMode = ProcessFilterModeOption.Disabled;
+                            try
+                            {
+                                _profiles = System.Text.Json.JsonSerializer.Deserialize<List<FilterProfile>>(FilterProfiles) ?? new List<FilterProfile>();
+                            }
+                            catch { _profiles = new List<FilterProfile>(); }
                         }
 
-                        ProcessFilterMode = processFilterMode;
-                        ProcessFilterList = NormalizeProcessFilterList(key.GetValue("ProcessFilterList", "")?.ToString() ?? "");
+                        // 向后兼容处理
+                        if (_profiles.Count == 0)
+                        {
+                            string processFilterModeRaw = key.GetValue("ProcessFilterMode", "Disabled")?.ToString() ?? "Disabled";
+                            ProcessFilterModeOption oldMode;
+                            if (!Enum.TryParse(processFilterModeRaw, true, out oldMode))
+                            {
+                                oldMode = ProcessFilterModeOption.Disabled;
+                            }
+                            string oldListRaw = key.GetValue("ProcessFilterList", "")?.ToString() ?? "";
+                            var oldList = oldListRaw
+                                .Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                .Select(s => s.ToLowerInvariant())
+                                .Distinct()
+                                .ToList();
+
+                            var defaultProfile = new FilterProfile
+                            {
+                                Name = "默认配置",
+                                Mode = oldMode == ProcessFilterModeOption.Disabled ? ProcessFilterModeOption.Blacklist : oldMode,
+                                Processes = oldList
+                            };
+                            _profiles.Add(defaultProfile);
+                            ActiveProfileId = defaultProfile.Id;
+                        }
+
+                        if (string.IsNullOrEmpty(ActiveProfileId) && _profiles.Count > 0)
+                        {
+                            ActiveProfileId = _profiles[0].Id;
+                        }
                     }
                 }
             }
             catch { }
+        }
+
+        public static List<FilterProfile> GetProfiles() => _profiles;
+
+        public static FilterProfile? GetActiveProfile()
+        {
+            return _profiles.FirstOrDefault(p => p.Id == ActiveProfileId) ?? _profiles.FirstOrDefault();
+        }
+
+        public static void SaveProfiles(List<FilterProfile> profiles, string activeId)
+        {
+            _profiles = profiles;
+            ActiveProfileId = activeId;
+            string json = System.Text.Json.JsonSerializer.Serialize(_profiles);
+            Save("FilterProfiles", json);
+            Save("ActiveProfileId", activeId);
         }
 
         public static void Save(string name, object value)
@@ -114,34 +181,45 @@ namespace BASpark
             catch { }
         }
 
-        public static string NormalizeProcessFilterList(string rawValue)
-        {
-            if (string.IsNullOrWhiteSpace(rawValue))
-            {
-                return string.Empty;
-            }
-
-            var normalizedLines = rawValue
-                .Replace("\r\n", "\n")
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(line => line.Trim().ToLowerInvariant())
-                .Where(line => !string.IsNullOrWhiteSpace(line))
-                .Distinct(StringComparer.OrdinalIgnoreCase);
-
-            return string.Join(Environment.NewLine, normalizedLines);
-        }
-
         public static IReadOnlySet<string> GetProcessFilterEntries()
         {
-            string normalized = NormalizeProcessFilterList(ProcessFilterList);
-            if (string.IsNullOrEmpty(normalized))
+            var profile = GetActiveProfile();
+            if (profile == null) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            return profile.Processes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        public static HashSet<string> GetEnabledScreenIds()
+        {
+            if (string.IsNullOrWhiteSpace(EnabledScreenIds))
             {
                 return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             }
 
-            return normalized
-                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var parsed = System.Text.Json.JsonSerializer.Deserialize<List<string>>(EnabledScreenIds) ?? new List<string>();
+                return parsed
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Select(s => s.Trim())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        public static void SaveEnabledScreenIds(IEnumerable<string> screenIds)
+        {
+            var normalized = screenIds
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            string json = System.Text.Json.JsonSerializer.Serialize(normalized);
+            Save("EnabledScreenIds", json);
         }
 
         public static void ResetAndClear()
@@ -150,7 +228,6 @@ namespace BASpark
             {
                 Registry.CurrentUser.DeleteSubKeyTree(RegPath, false);
 
-                // 适配 264100 版本之前的配置存储逻辑
                 string oldJson = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
                 if (System.IO.File.Exists(oldJson))
                 {
@@ -173,8 +250,13 @@ namespace BASpark
                 TrailRefreshRate = 40;
                 EnableEnvironmentFilter = false;
                 HideInFullscreen = true;
-                ProcessFilterMode = ProcessFilterModeOption.Disabled;
-                ProcessFilterList = "";
+                ShowEffectOnDesktop = true;
+                FilterProfiles = "";
+                ActiveProfileId = "";
+                _profiles.Clear();
+                IsTouchscreenMode = false;
+                ClickTriggerType = 0;
+                EnabledScreenIds = "";
             }
             catch { }
         }
